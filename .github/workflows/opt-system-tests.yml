@@ -1,0 +1,116 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: Modified system-tests
+env:
+  DEFAULT_MAVEN_OPTS: -Xmx4g -Duser.language=en -Duser.country=GB -Duser.timezone=UTC
+  MAVEN_COMMAND: ./mvnw -V -nsu -ntp -ff
+  MAVEN_BUILD_ARGUMENTS: install -D skipTests -am
+  MAVEN_RUN_ARGUMENTS: verify -P integration-tests -D include-python-integration-tests=true
+  MAVEN_PROJECTS: -pl :nifi-python-framework -pl :nifi-python-extension-api -pl :nifi-python-test-extensions
+    -pl nifi-system-tests/nifi-system-test-suite -pl nifi-system-tests/nifi-stateless-system-test-suite
+permissions:
+  contents: read
+jobs:
+  build_and_test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - ubuntu-latest
+        - macos-14
+        version:
+        - 21
+    timeout-minutes: 120
+    runs-on: ${{ matrix.os }}
+    name: build_and_test (${{ matrix.os }}, ${{ matrix.version }})
+    steps:
+    - name: Setup Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: |-
+        python -m pip install --upgrade pip
+        pip install inotify
+    - name: Run inotifywait
+      run: |-
+        python3 -c "
+        import inotify.adapters
+        import inotify.constants
+        import os
+        from datetime import datetime, timezone
+        with open('/home/runner/inotifywait-log-build_and_test (${{ matrix.os }}, ${{ matrix.version }}).csv', 'w') as log_file:
+          i = inotify.adapters.InotifyTree('/home/runner/work/nifi/nifi', inotify.constants.IN_CREATE | inotify.constants.IN_ACCESS)
+          for event in i.event_gen(yield_nones=False):
+            (_, type_names, path, filename) = event
+            now = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f') + 'Z'
+            events = ','.join(type_names)
+            log_file.write(f'{now};{path};{filename};{events}\n')
+            log_file.flush()
+            os.fsync(log_file.fileno())
+        " &
+    - name: System Information
+      run: |-
+        if [ "${{ runner.os }}" = "macOS" ]; then top -l 1 | grep PhysMem && sysctl machdep.cpu; else cat /proc/cpuinfo && cat /proc/meminfo; fi
+        df
+    - run: touch optcd-3.txt
+    - name: Checkout Code
+      uses: actions/checkout@v4
+    - run: touch optcd-4.txt
+    - name: Set up Java ${{ matrix.version }}
+      uses: actions/setup-java@v4
+      with:
+        distribution: zulu
+        java-version: ${{ matrix.version }}
+        cache: maven
+    - run: touch optcd-5.txt
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - run: touch optcd-6.txt
+    - name: Build Dependencies
+      env:
+        MAVEN_OPTS: ${{ env.DEFAULT_MAVEN_OPTS }}
+      run: |-
+        ${{ env.MAVEN_COMMAND }} ${{ env.MAVEN_BUILD_ARGUMENTS }} ${{ env.MAVEN_PROJECTS }}
+    - run: touch optcd-7.txt
+    - name: Run Tests
+      env:
+        MAVEN_OPTS: ${{ env.DEFAULT_MAVEN_OPTS }}
+      run: |-
+        ${{ env.MAVEN_COMMAND }} ${{ env.MAVEN_RUN_ARGUMENTS }} ${{ env.MAVEN_PROJECTS }}
+    - run: touch optcd-8.txt
+    - name: Upload Troubleshooting Logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.os }}-${{ matrix.version }}-troubleshooting-logs
+        path: |-
+          nifi-system-tests/nifi-system-test-suite/target/failsafe-reports/**/*.txt
+          nifi-system-tests/nifi-system-test-suite/target/surefire-reports/**/*.txt
+          nifi-system-tests/nifi-system-test-suite/target/troubleshooting/**/*
+        retention-days: 7
+    - run: touch optcd-9.txt
+    - name: Upload inotifywait logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: inotifywait-build_and_test (${{ matrix.os }}, ${{ matrix.version }})
+        path: /home/runner/inotifywait-log-build_and_test (${{ matrix.os }}, ${{ matrix.version
+          }}).csv
+'on':
+- push
+- workflow_dispatch
